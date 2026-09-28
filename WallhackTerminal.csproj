@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>WallhackTerminal</RootNamespace>
+    <AssemblyName>WallhackTerminal</AssemblyName>
+    <Product>WH_TERMINAL Desktop</Product>
+    <AssemblyTitle>WH_TERMINAL Desktop</AssemblyTitle>
+    <Version>1.0.0</Version>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\app.ico" />
+    <Resource Include="Assets\Fonts\*.otf;Assets\Fonts\*.ttf" />
+    <Resource Include="Assets\noise.png" Condition="Exists('Assets\noise.png')" />
+  </ItemGroup>
+
+</Project>

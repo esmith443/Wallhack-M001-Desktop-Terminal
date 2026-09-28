@@ -1,0 +1,10 @@
+bin/
+obj/
+publish/
+*.user
+.vs/
+
+Assets/Fonts/
+Assets/noise.png
+Assets/favicon.png
+Assets/wallhack.ico
