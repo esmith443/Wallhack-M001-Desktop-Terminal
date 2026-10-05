@@ -23,6 +23,11 @@ public sealed class MouseState
     public List<MacroStep>?[]? Macros { get; set; }
     public Curve?[] Curves { get; } = new Curve?[4];
     public bool CurvesUnsupported { get; set; }
+    public bool? MouseLinked { get; set; }
+    public int[]? DpiPresets { get; set; }
+    public int? MouseBattery { get; set; }
+    public int? DockBattery { get; set; }
+    public DateTime? BatteryUpdated { get; set; }
 
     public int? Get(SettingId id) => _settings.TryGetValue(id, out var v) ? v : null;
     public bool? Flag(SettingId id) => _settings.TryGetValue(id, out var v) ? v != 0 : null;
@@ -48,6 +53,10 @@ public sealed class MouseState
         Macros = null;
         Array.Clear(Curves);
         CurvesUnsupported = false;
+        MouseLinked = null;
+        DpiPresets = null;
+        MouseBattery = DockBattery = null;
+        BatteryUpdated = null;
     }
 }
 

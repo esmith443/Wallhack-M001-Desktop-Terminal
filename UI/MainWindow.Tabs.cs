@@ -35,6 +35,8 @@ public sealed partial class MainWindow
             "Enter opens the assignment list: mouse buttons, DPI controls, keyboard keys and combos, media keys, system actions or one of the on-board macros."),
         ["macros"] = ("Macros",
             "Up to four macros live on the mouse, 30 steps each. Record key and button sequences with their timing, then bind a macro to any button."),
+        ["battery"] = ("Battery",
+            "Charge of the mouse and dock batteries, read from the receiver every few seconds. Rate, time left and the graph are worked out from the readings this PC has collected, so they sharpen over time. The mouse reports its own level; it can sit at 100% for a while before the first drop."),
         ["app"] = ("Desktop app",
             "Settings for this app. They are stored on this PC, not on the mouse."),
         ["preset-label"] = ("Receiver dials",
@@ -147,6 +149,9 @@ public sealed partial class MainWindow
     FrameworkElement BuildPower()
     {
         var panel = new StackPanel();
+        panel.Children.Add(BuildBatterySection());
+        panel.Children.Add(Term.Blank());
+        panel.Children.Add(Heading("Sleep"));
         panel.Children.Add(Row("Auto sleep", () => OnOff(SettingId.SleepEnabled), Toggle(SettingId.SleepEnabled), help: "auto-sleep"));
         panel.Children.Add(Row("Sleep after", () => S.Get(SettingId.SleepMinutes) is int m ? $"{m} min" : "--",
             Range(SettingId.SleepMinutes, M001.SleepMinMinutes, M001.SleepMaxMinutes, 5),

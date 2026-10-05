@@ -9,10 +9,15 @@ public static class Presets
     public static readonly string[] DefaultDpi = ["400", "800", "1600", "3200", "6400", "12800", "25600"];
     public static readonly string[] DefaultPoll = ["125", "250", "500", "1000", "2000", "4000", "8000"];
 
+    public static string[] DpiDefaults(MouseState state) =>
+        state.DpiPresets is { } table && table.Length >= DefaultDpi.Length && table.Take(DefaultDpi.Length).All(v => v > 0)
+            ? table.Take(DefaultDpi.Length).Select(v => v.ToString()).ToArray()
+            : DefaultDpi;
+
     public static string Dpi(MouseState state, AppSettings settings) =>
         state.DpiRank is not int rank ? "----"
         : rank == M001.CustomRank ? (state.Get(SettingId.Dpi) is int dpi ? $"{dpi} DPI" : "CUSTOM")
-        : Label(settings.DpiPresetLabels, DefaultDpi, rank, "DPI");
+        : Label(settings.DpiPresetLabels, DpiDefaults(state), rank, "DPI");
 
     public static string Poll(MouseState state, AppSettings settings) =>
         state.PollRank is not int rank ? "----"
@@ -39,6 +44,8 @@ public sealed class NotificationService
     OsdWindow? _osd;
     bool _dpiPending, _pollPending;
     bool _hadConnection;
+    int _mouseAlerted = 100, _dockAlerted = 100;
+    static readonly int[] LowBatteryLevels = [20, 10, 5];
 
     public TrayService? Tray { get; set; }
 
@@ -54,6 +61,38 @@ public sealed class NotificationService
         };
         device.HardwareChanged += OnHardwareChanged;
         device.ConnectionChanged += OnConnectionChanged;
+        device.BatteryUpdated += OnBatteryUpdated;
+        device.DockBatterySwapped += OnDockBatterySwapped;
+    }
+
+    void OnDockBatterySwapped(bool inserted)
+    {
+        if (!_settings.NotifyConnection) return;
+        Show(inserted ? "DOCK BATTERY INSERTED" : "DOCK BATTERY REMOVED",
+            inserted ? "The level reading settles over the next few minutes." : "The dock's battery slot is empty.",
+            [("DOCK BATTERY", inserted ? "INSERTED" : "REMOVED")]);
+    }
+
+    void OnBatteryUpdated()
+    {
+        CheckLow("MOUSE", _device.State.MouseBattery, ref _mouseAlerted);
+        CheckLow("DOCK", _device.State.DockBattery, ref _dockAlerted);
+    }
+
+    void CheckLow(string name, int? level, ref int alerted)
+    {
+        if (level is not int value) return;
+        if (value >= 30)
+        {
+            alerted = 100;
+            return;
+        }
+        int threshold = LowBatteryLevels.Where(t => value <= t).DefaultIfEmpty(100).Min();
+        if (threshold >= alerted) return;
+        alerted = threshold;
+        if (!_settings.NotifyLowBattery) return;
+        Show($"{name} BATTERY {value}%", $"{(name == "MOUSE" ? "The mouse" : "The dock")} battery is running low.",
+            [($"{name} BATTERY", $"{value}%")]);
     }
 
     void OnHardwareChanged(HardwareChange change)
@@ -100,21 +139,25 @@ public sealed class NotificationService
         if (rows.Count > 0) Show(string.Join("  ·  ", parts), string.Join("\n", detail), rows);
     }
 
-    public void Show(string title, string body, IReadOnlyList<(string Label, string Value)> rows, bool forceAll = false)
+    public string? ClickTab { get; private set; }
+
+    public void Show(string title, string body, IReadOnlyList<(string Label, string Value)> rows, string? tab = null)
     {
-        if (_settings.WindowsNotifications || forceAll) Tray?.ShowBalloon(title, body);
-        if (_settings.OverlayNotifications || forceAll)
+        Log.Info($"notify: {title} (windows={_settings.WindowsNotifications}, overlay={_settings.OverlayNotifications})");
+        ClickTab = tab;
+        if (_settings.WindowsNotifications) Tray?.ShowBalloon(title, body);
+        if (_settings.OverlayNotifications)
         {
             _osd ??= new OsdWindow();
             _osd.Present(rows, _settings.OverlayPosition);
         }
     }
 
-    public void ShowTest(bool forceAll = false)
+    public void ShowTest()
     {
         var state = _device.State;
         Show($"{Presets.Dpi(state, _settings)}  ·  {Presets.Poll(state, _settings)}",
             "Test — this is how receiver dial changes are announced.",
-            [("DPI", Presets.Dpi(state, _settings)), ("POLLING RATE", Presets.Poll(state, _settings))], forceAll);
+            [("DPI", Presets.Dpi(state, _settings)), ("POLLING RATE", Presets.Poll(state, _settings))]);
     }
 }

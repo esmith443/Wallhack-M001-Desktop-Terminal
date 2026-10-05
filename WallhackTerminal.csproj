@@ -12,8 +12,10 @@
     <AssemblyName>WallhackTerminal</AssemblyName>
     <Product>WH_TERMINAL Desktop</Product>
     <AssemblyTitle>WH_TERMINAL Desktop</AssemblyTitle>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

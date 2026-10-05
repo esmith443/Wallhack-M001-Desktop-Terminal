@@ -85,7 +85,8 @@ public sealed partial class MainWindow
             }, enabled: () => _settings.OverlayNotifications, help: "app", requiresMouse: false));
         panel.Children.Add(AppToggle("Announce DPI changes", () => _settings.NotifyDpi, on => _settings.NotifyDpi = on));
         panel.Children.Add(AppToggle("Announce HZ changes", () => _settings.NotifyPollRate, on => _settings.NotifyPollRate = on));
-        panel.Children.Add(AppToggle("Announce plug / unplug", () => _settings.NotifyConnection, on => _settings.NotifyConnection = on));
+        panel.Children.Add(AppToggle("Announce plug / battery swap", () => _settings.NotifyConnection, on => _settings.NotifyConnection = on));
+        panel.Children.Add(AppToggle("Announce low battery", () => _settings.NotifyLowBattery, on => _settings.NotifyLowBattery = on));
         panel.Children.Add(Term.Blank());
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal };
@@ -98,9 +99,9 @@ public sealed partial class MainWindow
         return panel;
     }
 
-    TermRow InfoRow(string label, Func<string> value)
+    TermRow InfoRow(string label, Func<string> value, double valueCh = 30)
     {
-        var row = new TermRow(label, 56, 30, arrows: false) { Value = value, Static = true };
+        var row = new TermRow(label, 56, valueCh, arrows: false) { Value = value, Static = true };
         _refreshers.Add(row.Refresh);
         return row;
     }
@@ -118,7 +119,14 @@ public sealed partial class MainWindow
         panel.Children.Add(InfoRow("Receiver ID", () => S.ReceiverChipId ?? "--"));
         panel.Children.Add(InfoRow("DPI dial", () => S.DpiRank is null ? "--" : $"{Presets.Dpi(S, _settings)} · {Presets.Position(S.DpiRank)}"));
         panel.Children.Add(InfoRow("HZ dial", () => S.PollRank is null ? "--" : $"{Presets.Poll(S, _settings)} · {Presets.Position(S.PollRank)}"));
-        panel.Children.Add(InfoRow("Latest known firmware", () => "V" + M001.Releases[0].Version));
+        panel.Children.Add(InfoRow("Mouse link", () => S.MouseLinked switch { true => "CONNECTED", false => "OFF / ASLEEP", null => "--" }));
+        panel.Children.Add(InfoRow("Mouse battery", () => BatteryLook.Percent(S.MouseBattery) + (S.MouseLinked == false ? " (LAST KNOWN)" : "")));
+        panel.Children.Add(InfoRow("Dock battery", () => S.BatteryUpdated is not null && S.DockBattery is null ? "NO BATTERY" : BatteryLook.Percent(S.DockBattery)));
+        panel.Children.Add(InfoRow("DPI presets", () => S.DpiPresets is { } t ? string.Join(" ", t.Take(7)) : "--", valueCh: 38));
+        panel.Children.Add(InfoRow("Deep sleep after", () => S.Get(SettingId.DeepSleepMinutes) is int m ? $"{m} MIN" : "--"));
+        panel.Children.Add(InfoRow("Key debounce", () => S.Get(SettingId.KeyDebounce)?.ToString() ?? "--"));
+        panel.Children.Add(InfoRow("Angle snap", () => S.Flag(SettingId.AngleSnap) switch { true => "ON", false => "OFF", null => "--" }));
+        panel.Children.Add(InfoRow("Latest firmware", () => _updates.Firmware.Latest is { } latest ? "V" + latest.Version : "--"));
         panel.Children.Add(Term.Blank());
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal };
@@ -128,8 +136,8 @@ public sealed partial class MainWindow
         panel.Children.Add(buttons);
         panel.Children.Add(Term.Blank());
         panel.Children.Add(Term.Wrapped(
-            "Firmware updates are not done here — use the web terminal. Press X next to the device name first so " +
-            "the two apps do not talk to the receiver at the same time.", Term.Dim, 70));
+            "Firmware is installed with Wallhack's official web terminal; the Updates tab tells you when a new version is out " +
+            "and hands the receiver over to the site.", Term.Dim, 70));
         return panel;
     }
 
@@ -141,20 +149,20 @@ public sealed partial class MainWindow
             "Turn a dial and the active position is marked ◆. Press Enter on a row to rename it; an empty name restores the default.",
             Term.Dim, 70));
         panel.Children.Add(Term.Blank());
-        AddPresetRows(panel, "DPI dial", _settings.DpiPresetLabels, Presets.DefaultDpi, () => S.DpiRank, "DPI");
+        AddPresetRows(panel, "DPI dial", _settings.DpiPresetLabels, () => Presets.DpiDefaults(S), () => S.DpiRank, "DPI");
         panel.Children.Add(Term.Blank());
-        AddPresetRows(panel, "HZ dial", _settings.PollPresetLabels, Presets.DefaultPoll, () => S.PollRank, "HZ");
+        AddPresetRows(panel, "HZ dial", _settings.PollPresetLabels, () => Presets.DefaultPoll, () => S.PollRank, "HZ");
         return panel;
     }
 
-    void AddPresetRows(Panel panel, string heading, string[] labels, string[] defaults, Func<int?> activeRank, string symbol)
+    void AddPresetRows(Panel panel, string heading, string[] labels, Func<string[]> defaults, Func<int?> activeRank, string symbol)
     {
         panel.Children.Add(Heading(heading));
         for (int i = 0; i < AppSettings.PresetCount; i++)
         {
             int rank = i;
             panel.Children.Add(Row($"Position {rank + 1}",
-                () => string.IsNullOrWhiteSpace(labels[rank]) ? $"{defaults[rank]} {symbol}" : labels[rank],
+                () => string.IsNullOrWhiteSpace(labels[rank]) ? $"{defaults()[rank]} {symbol}" : labels[rank],
                 dynamicLabel: () => $"{(activeRank() == rank ? "◆" : " ")} Position {rank + 1}",
                 commit: text =>
                 {
@@ -163,7 +171,7 @@ public sealed partial class MainWindow
                     foreach (var refresh in _refreshers) refresh();
                     return true;
                 },
-                editText: () => string.IsNullOrWhiteSpace(labels[rank]) ? defaults[rank] : labels[rank],
+                editText: () => string.IsNullOrWhiteSpace(labels[rank]) ? defaults()[rank] : labels[rank],
                 help: "preset-label", requiresMouse: false));
         }
         panel.Children.Add(InfoRowWithLabel(() => $"{(activeRank() == M001.CustomRank ? "◆" : " ")} Position 8 (red {symbol})",

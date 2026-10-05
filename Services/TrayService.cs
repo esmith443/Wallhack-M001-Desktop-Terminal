@@ -10,8 +10,9 @@ public sealed class TrayService : IDisposable
     readonly DeviceService _device;
     readonly AppSettings _settings;
     readonly WF.NotifyIcon _icon;
-    readonly SD.Icon _iconConnected, _iconIdle;
-    readonly WF.ToolStripMenuItem _header, _dpi, _poll, _notifications, _autostart;
+    readonly SD.Icon _iconConnected, _iconIdle, _iconLow;
+    readonly WF.ToolStripMenuItem _header, _dpi, _poll, _battery, _update, _notifications, _autostart;
+    readonly UpdateCoordinator _updates;
     readonly SD.Font _font;
 
     public NotificationService? Notifications { get; set; }
@@ -19,18 +20,22 @@ public sealed class TrayService : IDisposable
     [DllImport("user32.dll")]
     static extern bool DestroyIcon(IntPtr handle);
 
-    public TrayService(App app, DeviceService device, AppSettings settings)
+    public TrayService(App app, DeviceService device, AppSettings settings, UpdateCoordinator updates)
     {
         _app = app;
         _device = device;
         _settings = settings;
-        _iconConnected = MakeIcon(connected: true);
-        _iconIdle = MakeIcon(connected: false);
+        _updates = updates;
+        _iconConnected = MakeIcon(SD.Color.FromArgb(0x00, 0xC9, 0x50));
+        _iconIdle = MakeIcon(SD.Color.FromArgb(0x71, 0x71, 0x7A));
+        _iconLow = MakeIcon(SD.Color.FromArgb(0xFB, 0x2C, 0x36));
         _font = new SD.Font("Consolas", 9.5f);
 
         _header = Item("", null, enabled: false);
         _dpi = Item("", null, enabled: false);
         _poll = Item("", null, enabled: false);
+        _battery = Item("", null, enabled: false);
+        _update = Item("", () => _app.ShowMainWindow("updates"));
         _notifications = Item("NOTIFICATIONS", () =>
         {
             _settings.WindowsNotifications = !_settings.WindowsNotifications;
@@ -43,7 +48,7 @@ public sealed class TrayService : IDisposable
             catch (Exception ex) { Log.Error("autostart toggle failed", ex); }
             Update();
         });
-        var open = Item("OPEN WH_TERMINAL", _app.ShowMainWindow);
+        var open = Item("OPEN WH_TERMINAL", () => _app.ShowMainWindow());
         open.Font = new SD.Font(_font, SD.FontStyle.Bold);
 
         var menu = new WF.ContextMenuStrip
@@ -56,22 +61,27 @@ public sealed class TrayService : IDisposable
             ForeColor = SD.Color.White,
         };
         menu.Items.AddRange([
-            _header, _dpi, _poll,
+            _header, _dpi, _poll, _battery,
             new WF.ToolStripSeparator(),
-            open, _notifications, _autostart,
+            _update, open, _notifications, _autostart,
             new WF.ToolStripSeparator(),
             Item("EXIT", _app.ExitApp),
         ]);
-        menu.Opening += (_, _) => Update();
+        menu.Opening += (_, _) =>
+        {
+            _autostart.Checked = Autostart.IsEnabled;
+            Update();
+        };
 
         _icon = new WF.NotifyIcon { ContextMenuStrip = menu, Visible = true };
         _icon.MouseClick += (_, e) =>
         {
             if (e.Button == WF.MouseButtons.Left) _app.ShowMainWindow();
         };
-        _icon.BalloonTipClicked += (_, _) => _app.ShowMainWindow();
+        _icon.BalloonTipClicked += (_, _) => _app.ShowMainWindow(Notifications?.ClickTab);
 
         _device.StateChanged += Update;
+        _updates.Changed += Update;
         Update();
     }
 
@@ -93,11 +103,21 @@ public sealed class TrayService : IDisposable
         _dpi.Text = $"DPI    {dpi}";
         _poll.Text = $"HZ     {poll}";
         _dpi.Visible = _poll.Visible = s.ReceiverConnected;
+        bool hasBattery = s.ReceiverConnected && s.BatteryUpdated is not null;
+        string battery = $"MOUSE {Level(s.MouseBattery)}{(s.MouseLinked == false ? " OFF" : "")} · DOCK {(s.DockBattery is null ? "NONE" : Level(s.DockBattery))}";
+        _battery.Text = $"BAT    {battery}";
+        _battery.Visible = hasBattery;
         _notifications.Checked = _settings.WindowsNotifications;
-        _autostart.Checked = Autostart.IsEnabled;
+        bool appUpdate = _updates.App.Available;
+        bool firmwareUpdate = _updates.FirmwareStatus == FirmwareStatus.Available;
+        _update.Text = appUpdate ? $"▲ UPDATE TO V{_updates.App.Latest!.Version.ToString(3)}"
+            : firmwareUpdate ? $"▲ FIRMWARE V{_updates.Firmware.Latest!.Version} AVAILABLE" : "";
+        _update.Visible = appUpdate || firmwareUpdate;
 
-        _icon.Icon = s.ReceiverConnected ? _iconConnected : _iconIdle;
-        string tip = s.ReceiverConnected ? $"WALLHACK M-001\n{dpi} · {poll}" : $"WH_TERMINAL\n{s.ReceiverStatus}";
+        _icon.Icon = !s.ReceiverConnected ? _iconIdle : s.MouseBattery is <= 15 ? _iconLow : _iconConnected;
+        string tip = s.ReceiverConnected
+            ? $"WALLHACK M-001\n{dpi} · {poll}" + (hasBattery ? $"\n{battery}" : "")
+            : $"WH_TERMINAL\n{s.ReceiverStatus}";
         _icon.Text = tip.Length > 127 ? tip[..127] : tip;
     }
 
@@ -109,7 +129,9 @@ public sealed class TrayService : IDisposable
         _icon.ShowBalloonTip(3000);
     }
 
-    static SD.Icon MakeIcon(bool connected)
+    static string Level(int? percent) => percent is int p ? $"{p}%" : "--";
+
+    static SD.Icon MakeIcon(SD.Color status)
     {
         using var bitmap = new SD.Bitmap(32, 32);
         using (var g = SD.Graphics.FromImage(bitmap))
@@ -125,7 +147,7 @@ public sealed class TrayService : IDisposable
                 g.FillRectangle(SD.Brushes.White, 7 + i, 19 - i, 2, 2);
             }
             g.FillRectangle(SD.Brushes.White, 14, 18, 5, 3);
-            using var light = new SD.SolidBrush(connected ? SD.Color.FromArgb(0x00, 0xC9, 0x50) : SD.Color.FromArgb(0x71, 0x71, 0x7A));
+            using var light = new SD.SolidBrush(status);
             g.FillRectangle(SD.Brushes.Black, 19, 19, 13, 13);
             g.FillRectangle(light, 21, 21, 10, 10);
         }
@@ -138,10 +160,12 @@ public sealed class TrayService : IDisposable
     public void Dispose()
     {
         _device.StateChanged -= Update;
+        _updates.Changed -= Update;
         _icon.Visible = false;
         _icon.Dispose();
         _iconConnected.Dispose();
         _iconIdle.Dispose();
+        _iconLow.Dispose();
     }
 
     sealed class TerminalRenderer() : WF.ToolStripProfessionalRenderer(new TerminalColors())

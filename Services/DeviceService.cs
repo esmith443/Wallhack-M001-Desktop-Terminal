@@ -14,10 +14,13 @@ public sealed class DeviceService : IDisposable
     int _scanning;
     bool _hydrating;
     DateTime _lastProbe = DateTime.MinValue;
+    DateTime _lastBatteryPoll = DateTime.MinValue;
+    bool _batteryReading, _linkChecking;
     readonly Dictionary<SettingId, int> _confirmed = new();
     readonly Dictionary<SettingId, CancellationTokenSource> _pendingWrites = new();
 
     public MouseState State { get; } = new();
+    public BatteryMonitor Battery { get; } = new();
     public bool Paused => _paused;
     public bool WindowVisible { get; set; }
 
@@ -29,6 +32,8 @@ public sealed class DeviceService : IDisposable
     public event Action<string, bool>? Traffic;
     public event Action<double>? MotionSpeed;
     public event Action<string, bool>? Status;
+    public event Action? BatteryUpdated;
+    public event Action<bool>? DockBatterySwapped;
 
     public DeviceService(Dispatcher ui)
     {
@@ -73,7 +78,11 @@ public sealed class DeviceService : IDisposable
             }
             else
             {
-                Post(MaybeProbe);
+                Post(() =>
+                {
+                    MaybeProbe();
+                    MaybePollStatus();
+                });
             }
         }
         catch (Exception ex)
@@ -95,7 +104,7 @@ public sealed class DeviceService : IDisposable
             return;
         }
         _client = client;
-        client.RanksReported += (dpi, poll) => Post(() => OnRanks(client, dpi, poll));
+        client.RanksReported += (_, _) => Post(() => _ = VerifyRanksAsync(client));
         client.MotionSpeedReported += speed => Post(() => MotionSpeed?.Invoke(speed));
         client.Disconnected += ex => Post(() => Detach(client, ex));
         client.ReportReceived += (id, data) =>
@@ -182,6 +191,87 @@ public sealed class DeviceService : IDisposable
 
     public Task RefreshAsync() => _client is { } client ? HydrateAsync(client, force: true) : Task.CompletedTask;
 
+    public Task RefreshBatteryAsync() => _client is { } client ? ReadBatteryAsync(client) : Task.CompletedTask;
+
+    void MaybePollStatus()
+    {
+        if (_client is not { } client || _hydrating || !State.ReceiverConnected) return;
+        var interval = WindowVisible ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(5);
+        if (DateTime.UtcNow - _lastBatteryPoll >= interval) _ = PollStatusAsync(client);
+    }
+
+    async Task PollStatusAsync(MouseClient client)
+    {
+        _lastBatteryPoll = DateTime.UtcNow;
+        await CheckLinkAsync(client);
+        await ReadBatteryAsync(client);
+    }
+
+    async Task CheckLinkAsync(MouseClient client)
+    {
+        if (_linkChecking) return;
+        _linkChecking = true;
+        try
+        {
+            bool? linked = await client.CheckConnectionAsync();
+            if (_client != client || linked is not bool now || State.MouseLinked == now) return;
+            if (State.MouseLinked is not null) Log.Info(now ? "mouse link up" : "mouse link down");
+            State.MouseLinked = now;
+            if (!now) State.MouseResponding = false;
+            else if (State.Hydrated) State.MouseResponding = true;
+            Changed();
+            if (now && !State.Hydrated) _ = HydrateAsync(client);
+        }
+        catch (Exception ex) when (ex is MouseTimeoutException or OperationCanceledException or ObjectDisposedException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log.Error("link check failed", ex);
+        }
+        finally
+        {
+            _linkChecking = false;
+        }
+    }
+
+    async Task ReadBatteryAsync(MouseClient client)
+    {
+        if (_batteryReading) return;
+        _batteryReading = true;
+        try
+        {
+            var reading = await client.ReadBatteryAsync();
+            if (_client != client || reading is null) return;
+            bool first = State.BatteryUpdated is null;
+            int? oldDock = State.DockBattery;
+            bool changed = first || State.MouseBattery != reading.Mouse || oldDock != reading.Dock;
+            State.MouseBattery = reading.Mouse;
+            State.DockBattery = reading.Dock;
+            State.BatteryUpdated = DateTime.Now;
+            Battery.Record(reading.Mouse, reading.Dock);
+            if (!changed) return;
+            Changed();
+            BatteryUpdated?.Invoke();
+            if (!first && (oldDock is null) != (reading.Dock is null))
+            {
+                Log.Info(reading.Dock is null ? "dock battery removed" : $"dock battery inserted ({reading.Dock}%)");
+                DockBatterySwapped?.Invoke(reading.Dock is not null);
+            }
+        }
+        catch (Exception ex) when (ex is MouseTimeoutException or OperationCanceledException or ObjectDisposedException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log.Error("battery read failed", ex);
+        }
+        finally
+        {
+            _batteryReading = false;
+        }
+    }
+
     async Task HydrateAsync(MouseClient client, bool force = false)
     {
         if (_hydrating) return;
@@ -194,13 +284,19 @@ public sealed class DeviceService : IDisposable
             try
             {
                 State.Versions = await client.ReadVersionsAsync(firstTry || force ? 3 : 1);
-                State.MouseResponding = true;
+                bool? linked = await client.CheckConnectionAsync(2);
+                State.MouseLinked = linked;
+                State.MouseResponding = linked != false;
             }
             catch (MouseTimeoutException)
             {
                 if (_client != client) return;
                 State.MouseResponding = false;
+            }
+            if (State.MouseResponding != true)
+            {
                 Changed();
+                await ReadBatteryAsync(client);
                 return;
             }
             State.Busy = true;
@@ -223,6 +319,16 @@ public sealed class DeviceService : IDisposable
             });
             await Step(client, async () =>
             {
+                var table = new int[M001.Addr.DpiPositions];
+                for (int i = 0; i < table.Length; i++)
+                {
+                    var block = await client.ReadAreaAsync(M001.Addr.DpiTable + i * M001.Addr.DpiBlockLength, M001.Addr.DpiBlockLength);
+                    table[i] = M001.DecodeSetting(SettingId.Dpi, block) ?? 0;
+                }
+                State.DpiPresets = table;
+            });
+            await Step(client, async () =>
+            {
                 var values = M001.ParseCombined(await client.ReadAreaAsync(M001.Addr.ReportUser, M001.Addr.CombinedLength));
                 foreach (var (id, value) in values) Confirm(id, value);
                 if (values.TryGetValue(SettingId.Ripple, out int ripple) && ripple != 0) SetSetting(SettingId.Ripple, 0);
@@ -232,6 +338,7 @@ public sealed class DeviceService : IDisposable
             State.Hydrated = true;
             Changed();
 
+            await ReadBatteryAsync(client);
             await Step(client, async () => State.Buttons = await client.ReadKeysAsync(defaults: false));
             await Step(client, async () => State.DefaultButtons = await client.ReadKeysAsync(defaults: true));
             await Step(client, ReadCurvesAsync);
@@ -289,6 +396,43 @@ public sealed class DeviceService : IDisposable
         if (!_pendingWrites.ContainsKey(id)) State.Set(id, value);
     }
 
+    bool _verifyingRanks, _ranksDirty;
+
+    async Task VerifyRanksAsync(MouseClient client)
+    {
+        if (_verifyingRanks)
+        {
+            _ranksDirty = true;
+            return;
+        }
+        _verifyingRanks = true;
+        try
+        {
+            do
+            {
+                _ranksDirty = false;
+                var poll = await client.ReadAreaAsync(M001.Addr.ReportEsb, 1);
+                var dpi = await client.ReadAreaAsync(M001.Addr.DpiRank, 1);
+                if (_client != client) return;
+                OnRanks(client,
+                    dpi.Length > 0 && dpi[0] <= M001.MaxRank ? dpi[0] : null,
+                    poll.Length > 0 && poll[0] <= M001.MaxRank ? poll[0] : null);
+            }
+            while (_ranksDirty);
+        }
+        catch (Exception ex) when (ex is MouseTimeoutException or MouseRejectedException or OperationCanceledException or ObjectDisposedException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log.Error("dial read failed", ex);
+        }
+        finally
+        {
+            _verifyingRanks = false;
+        }
+    }
+
     void OnRanks(MouseClient client, int? dpiRank, int? pollRank)
     {
         if (_client != client) return;
@@ -297,6 +441,7 @@ public sealed class DeviceService : IDisposable
         if (dpiRank is int dr) State.DpiRank = dr;
         if (pollRank is int pr) State.PollRank = pr;
         if (!dpiChanged && !pollChanged) return;
+        Log.Info($"dial moved: dpi position {State.DpiRank}, hz position {State.PollRank}");
         Changed();
         HardwareChanged?.Invoke(new HardwareChange(dpiChanged ? State.DpiRank : null, pollChanged ? State.PollRank : null));
     }

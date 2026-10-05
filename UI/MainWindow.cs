@@ -44,6 +44,7 @@ public sealed partial class MainWindow : Window
         ("calibration", "Calibration"),
         ("mapping", "Mapping"),
         ("advanced", "Advanced"),
+        ("updates", "Updates"),
     ];
 
     [StructLayout(LayoutKind.Sequential)]
@@ -59,6 +60,10 @@ public sealed partial class MainWindow : Window
     readonly DeviceService _device;
     readonly AppSettings _settings;
     readonly NotificationService _notifications;
+    readonly UpdateCoordinator _updates;
+    readonly StackPanel _page;
+    readonly StackPanel _updateBadges = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(Term.Cells(4), 0, 0, 0) };
+    readonly Border _scrollThumb = new() { Width = 3, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
 
     readonly StackPanel _navRoot = new();
     readonly Border _contentHost = new();
@@ -94,12 +99,13 @@ public sealed partial class MainWindow : Window
 
     MouseState S => _device.State;
 
-    public MainWindow(App app, DeviceService device, AppSettings settings, NotificationService notifications)
+    public MainWindow(App app, DeviceService device, AppSettings settings, NotificationService notifications, UpdateCoordinator updates)
     {
         _app = app;
         _device = device;
         _settings = settings;
         _notifications = notifications;
+        _updates = updates;
 
         Title = "WH_TERMINAL";
         var area = SystemParameters.WorkArea;
@@ -133,12 +139,15 @@ public sealed partial class MainWindow : Window
         {
         }
 
-        var page = new StackPanel { Margin = new Thickness(Term.Cells(2), Term.Cells(2), Term.Cells(2), 56) };
+        var page = _page = new StackPanel { Margin = PageMargin(_settings.LoggerExpanded) };
         var logo = Term.Text(string.Join("\n", Logo));
         logo.LineHeight = Term.Size;
         page.Children.Add(logo);
         page.Children.Add(Term.Blank());
-        page.Children.Add(Term.Text("WH_TERMINAL V1.0.0 - WALLHACK 2026 - DESKTOP"));
+        var versionLine = new StackPanel { Orientation = Orientation.Horizontal, Height = Term.Line };
+        versionLine.Children.Add(Term.Text($"WH_TERMINAL V{AppInfo.VersionText} - WALLHACK 2026 - DESKTOP"));
+        versionLine.Children.Add(_updateBadges);
+        page.Children.Add(versionLine);
         page.Children.Add(Term.Blank());
         page.Children.Add(Term.Text("Navigate with mouse or arrow & enter keys"));
         page.Children.Add(Term.Blank());
@@ -153,6 +162,7 @@ public sealed partial class MainWindow : Window
         _deviceLine.VerticalAlignment = VerticalAlignment.Center;
         deviceRow.Children.Add(_deviceButton);
         deviceRow.Children.Add(_deviceLine);
+        deviceRow.Children.Add(BuildBatteryChips());
 
         _tabs = new TermTabs(Tabs, _tab);
         _tabs.SelectionChanged += id =>
@@ -258,6 +268,7 @@ public sealed partial class MainWindow : Window
         _loggerDrawer.HeaderExtra = _loggerMode;
         _loggerDrawer.ExpandedChanged += expanded =>
         {
+            _page.Margin = PageMargin(expanded);
             _settings.LoggerExpanded = expanded;
             _settings.Save();
         };
@@ -282,7 +293,7 @@ public sealed partial class MainWindow : Window
                 RadiusY = 0.75,
                 GradientStops =
                 {
-                    new GradientStop(Colors.Transparent, 0.633),
+                    new GradientStop(Color.FromArgb(0, 0, 0, 0), 0.633),
                     new GradientStop(Color.FromArgb(0x33, 0, 0, 0), 1.0),
                 },
             },
@@ -293,6 +304,10 @@ public sealed partial class MainWindow : Window
 
         var root = new Grid();
         root.Children.Add(scroller);
+        _scrollThumb.Background = Term.Dim40;
+        _scrollThumb.Margin = new Thickness(0, 0, 4, 0);
+        root.Children.Add(_scrollThumb);
+        scroller.ScrollChanged += (_, _) => UpdateScrollThumb(scroller);
         root.Children.Add(titleBar);
         root.Children.Add(bottomLeft);
         root.Children.Add(_loggerDrawer);
@@ -320,6 +335,7 @@ public sealed partial class MainWindow : Window
         };
 
         _device.StateChanged += OnStateChanged;
+        _updates.Changed += OnStateChanged;
         _device.Status += ShowStatus;
         _device.MotionSpeed += speed =>
         {
@@ -401,6 +417,22 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    static Thickness PageMargin(bool loggerExpanded) => new(Term.Cells(2), Term.Cells(2), Term.Cells(2), loggerExpanded ? 320 : 56);
+
+    void UpdateScrollThumb(ScrollViewer scroller)
+    {
+        if (scroller.ExtentHeight <= scroller.ViewportHeight + 1)
+        {
+            _scrollThumb.Visibility = Visibility.Collapsed;
+            return;
+        }
+        double height = Math.Max(24, scroller.ViewportHeight * scroller.ViewportHeight / scroller.ExtentHeight);
+        double top = (scroller.ViewportHeight - height) * scroller.VerticalOffset / (scroller.ExtentHeight - scroller.ViewportHeight);
+        _scrollThumb.Height = height;
+        _scrollThumb.Margin = new Thickness(0, top, 4, 0);
+        _scrollThumb.Visibility = Visibility.Visible;
+    }
+
     void ToggleMaximize() => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
 
     protected override void OnClosing(CancelEventArgs e)
@@ -418,6 +450,7 @@ public sealed partial class MainWindow : Window
     {
         base.OnClosed(e);
         _device.StateChanged -= OnStateChanged;
+        _updates.Changed -= OnStateChanged;
         _device.Status -= ShowStatus;
         _device.TrafficEnabled = false;
         _raw.Unregister();
@@ -479,6 +512,8 @@ public sealed partial class MainWindow : Window
     void OnStateChanged()
     {
         UpdateHeader();
+        UpdateBadges();
+        UpdateBatteryChips();
         _art.Angle = S.Get(SettingId.SensorAngle) ?? 0;
         if ((_structureKey?.Invoke() ?? "") != _structure) RebuildTab(keepFocus: true);
         else foreach (var refresh in _refreshers) refresh();
@@ -523,15 +558,9 @@ public sealed partial class MainWindow : Window
         UpdateHeader();
     }
 
-    public void OpenTab(string path)
+    public void OpenTab(string id)
     {
-        var parts = path.ToLowerInvariant().Split('/');
-        if (!Tabs.Any(t => t.Id == parts[0])) return;
-        if (parts[0] == "advanced" && parts.Length > 1) _advancedTab = parts[1];
-        if (_tab == parts[0]) RebuildTab(keepFocus: false);
-        else _tabs.Select(parts[0]);
-        if (parts[0] == "mapping" && parts.Length > 2 && int.TryParse(parts[2], out int slot))
-            OpenSubView(parts[1] == "macro" ? MappingView.MacroEditor : MappingView.Picker, slot);
+        if (Tabs.Any(t => t.Id == id)) _tabs.Select(id);
     }
 
     void RebuildTab(bool keepFocus)
@@ -546,6 +575,7 @@ public sealed partial class MainWindow : Window
             "power" => BuildPower(),
             "calibration" => BuildCalibration(),
             "mapping" => BuildMapping(),
+            "updates" => BuildUpdates(),
             _ => BuildAdvanced(),
         };
         _structure = _structureKey?.Invoke() ?? "";
@@ -693,6 +723,7 @@ public sealed partial class MainWindow : Window
 
     Task<bool> ConfirmAsync(string title, string subtitle, string ok = "OK", string cancel = "Cancel")
     {
+        _dialogCancel?.Invoke();
         var result = new TaskCompletionSource<bool>();
         var previous = Keyboard.FocusedElement as IInputElement;
         void Finish(bool value)

@@ -5,7 +5,7 @@
 00  0  00          00   00  00   00     00
 00     00           00000    00000    000000
 
-WH_TERMINAL DESKTOP V1.0.0 - WALLHACK M-001
+WH_TERMINAL DESKTOP V1.1.0 - WALLHACK M-001
 
 ◆ NATIVE WINDOWS CONFIGURATOR + TRAY NOTIFICATIONS
 ```
@@ -14,16 +14,19 @@ WH_TERMINAL DESKTOP V1.0.0 - WALLHACK M-001
 
 ```text
 PERFORMANCE ....................... DPI · POLLING RATE · MOTION SYNC · SCANNING MODE
-POWER ............................. AUTO SLEEP · SLEEP TIMER
+POWER ............................. MOUSE + DOCK BATTERY · 24H GRAPH · AUTO SLEEP
 CALIBRATION ....................... LIFT-OFF · SENSOR ROTATION · DPI ACCELERATION
 MAPPING ........................... BUTTONS · KEYS · MEDIA · ON-BOARD MACROS
-TRAY .............................. DPI / HZ DIAL CHANGES → WINDOWS NOTIFICATION
+UPDATES ........................... APP SELF-UPDATE · FIRMWARE CHECK
+TRAY .............................. DIAL CHANGES · BATTERY SWAP · LOW BATTERY ALERTS
 ```
 
 ## > SCREENSHOTS
 
-| `CALIBRATION` | `MAPPING` |
+| `POWER` | `UPDATES` |
 | :---: | :---: |
+| ![Power](docs/screenshots/power-features.gif) | ![Updates](docs/screenshots/updates.png) |
+| `CALIBRATION` | `MAPPING` |
 | ![Calibration](docs/screenshots/calibration.png) | ![Mapping](docs/screenshots/mapping.png) |
 | `MACROS` | `RECEIVER DIALS` |
 | ![Macros](docs/screenshots/macros.png) | ![Receiver dials](docs/screenshots/receiver.png) |
@@ -34,12 +37,17 @@ TRAY .............................. DPI / HZ DIAL CHANGES → WINDOWS NOTIFICATI
 
 ```text
 TURN A DIAL ON THE RECEIVER ....... THE TRAY ANNOUNCES THE NEW DPI / HZ
+SWAP THE DOCK BATTERY ............. THE TRAY ANNOUNCES IT
+NEW RELEASE ON GITHUB ............. UPDATES TAB → INSTALL UPDATE
+NEW MOUSE FIRMWARE ................ UPDATES TAB → WALLHACK.COM
 ```
 
 ## > DOWNLOAD
 
 Grab `WallhackTerminal.exe` from [Releases](https://github.com/esmith443/Wallhack-M001-Desktop-Terminal/releases). Requires the
-[.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0).
+[.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0). After that the app updates itself: each download is
+checked against the release's SHA-256 before it replaces the old version. Mouse firmware is only ever installed through Wallhack's
+official web terminal.
 
 ## > BUILD IT YOURSELF
 

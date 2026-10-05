@@ -17,6 +17,10 @@ public sealed class AppSettings
     public bool NotifyDpi { get; set; } = true;
     public bool NotifyPollRate { get; set; } = true;
     public bool NotifyConnection { get; set; } = true;
+    public bool NotifyLowBattery { get; set; } = true;
+    public bool CheckForUpdates { get; set; } = true;
+    public string AnnouncedAppVersion { get; set; } = "";
+    public string AnnouncedFirmwareVersion { get; set; } = "";
     public bool CloseToTray { get; set; } = true;
     public bool GrainEffect { get; set; } = true;
     public bool LoggerExpanded { get; set; } = true;

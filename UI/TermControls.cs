@@ -23,6 +23,7 @@ public sealed class TermRow : Border
     public string? HelpTitle { get; init; }
     public string? HelpText { get; init; }
     public bool Static { get; init; }
+    public Func<Brush>? ValueBrush { get; init; }
 
     public TermRow(string label, double widthCh = 56, double valueCh = 16, bool arrows = true)
     {
@@ -123,7 +124,8 @@ public sealed class TermRow : Border
         Background = focused ? Term.Fg : Brushes.Transparent;
         BorderBrush = hot ? Term.Fg : Brushes.Transparent;
         var text = focused ? Term.Bg : Term.Fg;
-        _label.Foreground = _dots.Foreground = _value.Foreground = text;
+        _label.Foreground = _dots.Foreground = text;
+        _value.Foreground = focused ? Term.Bg : ValueBrush?.Invoke() ?? Term.Fg;
         Arrow(_lt, _ltText, focused);
         Arrow(_gt, _gtText, focused);
         Opacity = _enabled ? 1 : 0.5;
@@ -166,7 +168,7 @@ public sealed class TermRow : Border
                 break;
             case Key.Enter:
             case Key.Space:
-                Fire(1);
+                if (!e.IsRepeat) Fire(1);
                 e.Handled = true;
                 break;
         }
@@ -373,7 +375,7 @@ public sealed class TermButton : Border
         if (e.Key is Key.Enter or Key.Space)
         {
             e.Handled = true;
-            _click();
+            if (!e.IsRepeat) _click();
         }
     }
 }
@@ -464,7 +466,7 @@ public sealed class TermList : Border
                 break;
             case Key.Enter:
             case Key.Space:
-                if (_rows.Count > 0) Activated?.Invoke(Index);
+                if (_rows.Count > 0 && !e.IsRepeat) Activated?.Invoke(Index);
                 e.Handled = true;
                 break;
             case Key.Up:

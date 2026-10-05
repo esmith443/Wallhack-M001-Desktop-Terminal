@@ -32,10 +32,8 @@ public sealed class MouseClient : IDisposable
     DateTime _quietUntil = DateTime.MinValue;
     bool _fastBeginEchoes = true;
     bool _preCommitEcho = true;
-    volatile bool _responsive = true;
     int _disconnected;
 
-    public HidInterfaceInfo CommandInterface => _command.Info;
     public IReadOnlyList<HidInterfaceInfo> OpenInterfaces => _connections.Select(c => c.Info).ToList();
 
     public event Action<byte, byte[]>? ReportReceived;
@@ -130,7 +128,6 @@ public sealed class MouseClient : IDisposable
         }
 
         if (reportId != M001.ReportCommand) return;
-        _responsive = true;
 
         Waiter? hit = null;
         lock (_lock)
@@ -200,7 +197,6 @@ public sealed class MouseClient : IDisposable
             RemoveWaiter(waiter);
             _cts.Token.ThrowIfCancellationRequested();
         }
-        _responsive = false;
         throw new MouseTimeoutException();
     }
 
@@ -232,6 +228,17 @@ public sealed class MouseClient : IDisposable
 
     public Task<FirmwareVersions?> ReadVersionsAsync(int attempts = Attempts) => RunAsync(async () =>
         M001.ParseVersions(await RequestAsync(M001.Simple(M001.Cmd.ReadVersion), ReplyTo(M001.Cmd.ReadVersion), attempts)
+            .ConfigureAwait(false)));
+
+    public Task<bool?> CheckConnectionAsync(int attempts = 1) => RunAsync(async () =>
+    {
+        var reply = await RequestAsync(M001.Simple(M001.Cmd.CheckConnection), ReplyTo(M001.Cmd.CheckConnection), attempts)
+            .ConfigureAwait(false);
+        return reply.Length > 7 ? reply[7] != 0 : (bool?)null;
+    });
+
+    public Task<BatteryReading?> ReadBatteryAsync(int attempts = 1) => RunAsync(async () =>
+        M001.ParseBattery(await RequestAsync(M001.Simple(M001.Cmd.Battery), ReplyTo(M001.Cmd.Battery), attempts)
             .ConfigureAwait(false)));
 
     public Task<string?> ReadChipIdAsync(bool receiver) => RunAsync(async () =>
@@ -337,10 +344,7 @@ public sealed class MouseClient : IDisposable
 
     async Task<bool> TransactCoreAsync(IReadOnlyList<byte[]> commands)
     {
-        if (!_responsive)
-        {
-            await RequestAsync(M001.Simple(M001.Cmd.ReadVersion), ReplyTo(M001.Cmd.ReadVersion), 2).ConfigureAwait(false);
-        }
+        await EnsureMouseLinkedAsync().ConfigureAwait(false);
 
         if (_fastBeginEchoes)
         {
@@ -350,9 +354,8 @@ public sealed class MouseClient : IDisposable
             }
             catch (MouseTimeoutException)
             {
-                await RequestAsync(M001.Simple(M001.Cmd.ReadVersion), ReplyTo(M001.Cmd.ReadVersion), 2).ConfigureAwait(false);
+                await EnsureMouseLinkedAsync().ConfigureAwait(false);
                 _fastBeginEchoes = false;
-                _responsive = true;
                 await Task.Delay(500, _cts.Token).ConfigureAwait(false);
             }
         }
@@ -381,7 +384,6 @@ public sealed class MouseClient : IDisposable
                     catch (MouseTimeoutException)
                     {
                         _preCommitEcho = false;
-                        _responsive = true;
                         pending.Add(AddWaiter(echo));
                         continue;
                     }
@@ -400,7 +402,6 @@ public sealed class MouseClient : IDisposable
             catch (MouseTimeoutException)
             {
                 confirmed = false;
-                _responsive = true;
             }
             _quietUntil = DateTime.UtcNow.AddMilliseconds(PostCommitCooldownMs);
         }
@@ -421,6 +422,12 @@ public sealed class MouseClient : IDisposable
 
         if (rejected != 0) throw new MouseRejectedException(rejected);
         return confirmed;
+    }
+
+    async Task EnsureMouseLinkedAsync()
+    {
+        var reply = await RequestAsync(M001.Simple(M001.Cmd.CheckConnection), ReplyTo(M001.Cmd.CheckConnection), 2).ConfigureAwait(false);
+        if (reply.Length > 7 && reply[7] == 0) throw new MouseTimeoutException("Mouse is off or asleep — move it to wake it, then try again");
     }
 
     public void Dispose()

@@ -54,10 +54,23 @@ public sealed partial class MainWindow
         {
             int slot = i;
             panel.Children.Add(Row($"Macro {slot + 1}",
-                () => S.Macros is null ? "----" : S.Macros[slot] is { Count: > 0 } m ? $"{m.Count} steps" : "empty",
-                activate: () => OpenSubView(MappingView.MacroEditor, slot), help: "macros", valueCh: 28));
+                () => _macroDirty && _macroDraftSlot == slot ? $"{_macroDraft.Count} steps · unsaved"
+                    : S.Macros is null ? "----" : S.Macros[slot] is { Count: > 0 } m ? $"{m.Count} steps" : "empty",
+                activate: () => OpenMacroEditor(slot), help: "macros", valueCh: 28));
         }
         return panel;
+    }
+
+    async void OpenMacroEditor(int slot)
+    {
+        if (_macroDirty && _macroDraftSlot != slot)
+        {
+            if (!await ConfirmAsync($"Discard macro {_macroDraftSlot + 1} changes",
+                    "Those edits have not been saved to the mouse.", "Discard", "Keep")) return;
+            _macroDraftSlot = -1;
+            _macroDirty = false;
+        }
+        OpenSubView(MappingView.MacroEditor, slot);
     }
 
     void OpenSubView(MappingView view, int slot)
@@ -92,8 +105,7 @@ public sealed partial class MainWindow
         if (_recording) StopRecording();
         _keyCapture = null;
         _mappingView = MappingView.List;
-        _macroDraftSlot = -1;
-        _macroDirty = false;
+        if (!_macroDirty) _macroDraftSlot = -1;
     }
 
     FrameworkElement BuildPicker()

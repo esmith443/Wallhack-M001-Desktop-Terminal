@@ -65,6 +65,9 @@ public static class M001
         public const int DynamicDpiMode = 118;
         public const int DynamicDpiSpeedReport = 119;
         public const int CombinedLength = 16;
+        public const int DpiTable = 14;
+        public const int DpiBlockLength = 9;
+        public const int DpiPositions = 8;
 
         public const int CurveClassic = 640, CurveNatural = 650, CurveJump = 660, CurveCustom = 670;
     }
@@ -189,11 +192,23 @@ public static class M001
         s[SettingId.DynEnabled] = d[13] != 0 ? 1 : 0;
         if (d[14] <= 3) s[SettingId.DynMode] = d[14];
         s[SettingId.DynSpeedReporting] = d[15] != 0 ? 1 : 0;
+        int deepSleep = d[3] | (d[4] << 8);
+        if (deepSleep > 0) s[SettingId.DeepSleepMinutes] = (int)Math.Round(deepSleep / 60.0, MidpointRounding.AwayFromZero);
+        s[SettingId.KeyDebounce] = d[5];
+        s[SettingId.AngleSnap] = d[7] != 0 ? 1 : 0;
         return s;
     }
 
     public static FirmwareVersions? ParseVersions(byte[] r) =>
         r.Length < 13 ? null : new FirmwareVersions((r[7] << 8) | r[8], (r[9] << 8) | r[10], (r[11] << 8) | r[12]);
+
+    public static BatteryReading? ParseBattery(byte[] r)
+    {
+        if (r.Length < 9) return null;
+        int? mouse = r[7] is > 0 and <= 100 ? r[7] : null;
+        int? dock = r[8] is > 0 and <= 100 ? r[8] : null;
+        return new BatteryReading(mouse, dock);
+    }
 
     public static string? ParseChipId(byte[] r)
     {
@@ -205,16 +220,18 @@ public static class M001
         return (r[2] == Cmd.ReadMouseChipId ? "28" : "29") + Convert.ToHexString(bytes[..n]);
     }
 
+    public static IReadOnlyList<FirmwareRelease> KnownReleases { get; set; } = [];
+
     public static readonly FirmwareRelease[] Releases =
     [
         new("1.17.0", "2026-09-16", 57, 41, 55),
         new("1.16.0", "2026-09-04", 57, 40, 53),
-        new("1.15.0", null, 55, 39, 52),
-        new("1.14.0", null, 53, 37, 52),
-        new("1.13.0", null, 52, 36, 48),
-        new("1.11.0", null, 51, 36, 48),
-        new("1.10.0", null, 50, 36, 41),
-        new("1.7.0", null, 41, 33, 39),
+        new("1.15.0", "2026-08-28", 55, 39, 52),
+        new("1.14.0", "2026-08-18", 53, 37, 52),
+        new("1.13.0", "2026-08-13", 52, 36, 48),
+        new("1.11.0", "2026-07-24", 51, 36, 48),
+        new("1.10.0", "2026-06-23", 50, 36, 41),
+        new("1.7.0", "2026-05-26", 41, 33, 39),
     ];
 
     public const int ButtonSlots = 5;
@@ -243,12 +260,17 @@ public enum SettingId
     DynEnabled,
     DynMode,
     DynSpeedReporting,
+    DeepSleepMinutes,
+    KeyDebounce,
+    AngleSnap,
 }
+
+public sealed record BatteryReading(int? Mouse, int? Dock);
 
 public sealed record FirmwareVersions(int Mouse, int Receiver, int ReceiverNxp)
 {
     public FirmwareRelease? Release =>
-        M001.Releases.FirstOrDefault(r => r.Mouse == Mouse && r.Receiver == Receiver && r.ReceiverNxp == ReceiverNxp);
+        M001.KnownReleases.Concat(M001.Releases).FirstOrDefault(r => r.Mouse == Mouse && r.Receiver == Receiver && r.ReceiverNxp == ReceiverNxp);
 }
 
-public sealed record FirmwareRelease(string Version, string? Date, int Mouse, int Receiver, int ReceiverNxp);
+public sealed record FirmwareRelease(string Version, string? Date, int Mouse, int Receiver, int ReceiverNxp, string? Changelog = null);
